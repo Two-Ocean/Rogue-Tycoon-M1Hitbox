@@ -5,21 +5,63 @@ local Attacking = _G.StatusEffects.Attacking
 local noJump = _G.StatusEffects.NoJump
 local AtkStun = _G.StatusEffects.AttackingStun
 --// SERVICES //--
-local RS : ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS = game:GetService("ReplicatedStorage")
+local Debris = game.Debris
+local TweenService = game:GetService("TweenService")
 
 --// UTIL MODULES //--
 local Config :ModuleScript = require(RS.Combat.Modules.Config)
 local Globals :ModuleScript = _G.SharedServices.Globals
 local MuchachoHitbox :ModuleScript = _G.SharedServices.MuchachoHitbox
 local Packet = _G.SharedServices.Packet
+local Janitor = require(RS.Services.Shared.Packages.Janitor)
 local m1Config = Config.M1Fist.M1
 
 local HitboxPacket = Packet("M1Hit", Packet.Instance)
 
 local M1 = WCS.RegisterSkill(script.Name)
 
+--// HELPER FUNCTIONS //--
+local function hasAttribute(plr, char, attr)
+	return (plr and plr:GetAttribute(attr)) or char:GetAttribute(attr)
+end
+
 local function getAnimationFolder(plr, char)
-	return "M1Anims"
+	return (hasAttribute(plr, char, "TrainedFists") and "TrainedM1Anims") or "M1Anims"
+end
+
+local function applyThunderPunch(char, hrp)
+	local pl = Instance.new("PointLight")
+	pl.Parent = hrp
+	pl.Color = Color3.fromRGB(26, 194, 255)
+	pl.Brightness = 0
+	pl.Range = 0
+
+	TweenService:Create(pl, TweenInfo.new(0.2), {Range = 10, Brightness = 0.75}):Play()
+	task.delay(0.2, function()
+		TweenService:Create(pl, TweenInfo.new(0.2), {Range = 0, Brightness = 0}):Play()
+	end)
+
+	local sfx = Instance.new("Sound")
+	sfx.Parent = hrp
+	sfx.Name = "Electricity"
+	sfx.SoundId = "rbxassetid://2710893244"
+	sfx.PlaybackSpeed = 2
+	sfx.Volume = 1.15
+	sfx:Play()
+	Debris:AddItem(sfx, 1.512)
+
+	for _, part in pairs(char:GetChildren()) do
+		if part.Name == "Right Arm" or part.Name == "Left Arm" then
+			local pticle = script:WaitForChild("Electric"):Clone()
+			pticle.Enabled = true
+			pticle.Parent = part
+			task.delay(0.7, function()
+				pticle.Enabled = false
+			end)
+			Debris:AddItem(pticle, 1)
+		end
+	end	
 end
 
 --// SERVER INIT //--
@@ -56,11 +98,14 @@ end
 --// CLIENT INIT //--
 function M1:OnConstructClient()
 	local char = self.Character.Instance
+	local hrp = char.HumanoidRootPart
 	local hum = char:WaitForChild("Humanoid")
 	local animator = hum:WaitForChild("Animator")
 	local plr = self.Player
 
 	self.AnimationTracks = {}
+	self.playerJanitor = Janitor.new()
+	self.charJanitor = Janitor.new()
 
 	local function LoadAnimations()
 		-- Stop existing tracks
@@ -83,6 +128,16 @@ function M1:OnConstructClient()
 	end
 
 	LoadAnimations()
+	
+	if plr then
+		self.playerJanitor:Add(plr:GetAttributeChangedSignal("TrainedFists"):Connect(function()
+			LoadAnimations()
+		end))
+	else
+		self.charJanitor:Add(char:GetAttributeChangedSignal("TrainedFists"):Connect(function()
+			LoadAnimations()
+		end))
+	end
 
 	-- Play animations on metadata change
 	self.MetadataChanged:Connect(function(newMeta, oldMeta)
@@ -99,6 +154,27 @@ function M1:OnConstructClient()
 		if track then
 			track:Play()
 		end
+		
+		if hasAttribute(plr, char, "ThunderFists") then applyThunderPunch(char,hrp) end
+	end)
+	
+	self.playerJanitor:Add(game.Players.PlayerRemoving:Connect(function(player)
+		if player == self.Player then
+			self.playerJanitor:Cleanup()
+		end
+	end))
+	
+	self.charJanitor:Add(self.Player.CharacterRemoving:Connect(function(character)
+		if character == char then
+			self.charJanitor:Cleanup()
+		end
+	end))
+	
+	self.Destroyed:Connect(function()
+		self.playerJanitor:Cleanup()
+		self.charJanitor:Cleanup()
+		self.playerJanitor:Destroy()
+		self.charJanitor:Destroy()
 	end)
 end
 
@@ -220,14 +296,13 @@ function M1:OnStartClient(air, spaceHeld)
 		hitbox.DetectionMode = "Default"
 		hitbox.Offset = m1Config.HitboxOffset
 		hitbox.Size = (isFinalHit and Vector3.new(6, 6, 7)) or m1Config.HitboxSize
-		print(hitbox.Size)
 		hitbox.VelocityPrediction = true
 		hitbox.VelocityPredictionTime = 0.05
 		hitbox.OverlapParams = ovParams
 
 		local hitTargets = {}
 		
-		-- Hitbox detection
+		-- Hitbox detection (no need to cleanup as MuchachoHitbox handles its own garbage collection)
 		hitbox.Touched:Connect(function(hit, targetHum)
 			print(hit)
 			print(targetHum)
