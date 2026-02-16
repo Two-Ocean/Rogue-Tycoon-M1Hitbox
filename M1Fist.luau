@@ -15,13 +15,15 @@ local Globals :ModuleScript = _G.SharedServices.Globals
 local MuchachoHitbox :ModuleScript = _G.SharedServices.MuchachoHitbox
 local Packet = _G.SharedServices.Packet
 local Janitor = require(RS.Services.Shared.Packages.Janitor)
+-- Configuration values
 local m1Config = Config.M1Fist.M1
 
 local HitboxPacket = Packet("M1Hit", Packet.Instance)
 
+--WCS API to register skill (refer to https://wad4444.github.io/WCS/docs/api/skill for all WCS API)
 local M1 = WCS.RegisterSkill(script.Name)
 
---// HELPER FUNCTIONS //--
+--// HELPER FUNCTIONS (mostly straightforward and in the name) //--
 local function hasAttribute(plr, char, attr)
 	return (plr and plr:GetAttribute(attr)) or char:GetAttribute(attr)
 end
@@ -30,6 +32,7 @@ local function getAnimationFolder(plr, char)
 	return (hasAttribute(plr, char, "TrainedFists") and "TrainedM1Anims") or "M1Anims"
 end
 
+-- VFX function for thunder punch
 local function applyThunderPunch(char, hrp)
 	local pl = Instance.new("PointLight")
 	pl.Parent = hrp
@@ -129,6 +132,7 @@ function M1:OnConstructClient()
 
 	LoadAnimations()
 	
+	--Change animations if player's fist type changes (char in case of NPCs)
 	if plr then
 		self.playerJanitor:Add(plr:GetAttributeChangedSignal("TrainedFists"):Connect(function()
 			LoadAnimations()
@@ -139,37 +143,43 @@ function M1:OnConstructClient()
 		end))
 	end
 
-	-- Play animations on metadata change
+	-- Play animations on metadata change.
 	self.MetadataChanged:Connect(function(newMeta, oldMeta)
 		if not oldMeta or newMeta.LastTick == oldMeta.LastTick then
 			return
 		end
-
+		
+		-- Client starts after server finishes running. Metadata sync necessary 
 		local comboToPlay = newMeta.Combo - 1
 		if comboToPlay == 0 then 
 			comboToPlay = m1Config.MaxCombo 
 		end 
-
+		
+		-- Client side animation play
 		local track = self.AnimationTracks[comboToPlay]
 		if track then
 			track:Play()
 		end
 		
+		-- Apply previous thunder punch VFX if applicable to character
 		if hasAttribute(plr, char, "ThunderFists") then applyThunderPunch(char,hrp) end
 	end)
 	
+	-- Cleanup on player leaving to avoid memory leaks (Unsure if WCS already handles cleanup on non-native connections)
 	self.playerJanitor:Add(game.Players.PlayerRemoving:Connect(function(player)
 		if player == self.Player then
 			self.playerJanitor:Cleanup()
 		end
 	end))
 	
+	-- Cleanup on player/NPC death to avoid memory leaks (Unsure if WCS already handles cleanup on non-native connections)
 	self.charJanitor:Add(self.Player.CharacterRemoving:Connect(function(character)
 		if character == char then
 			self.charJanitor:Cleanup()
 		end
 	end))
 	
+	-- Cleanup on destroy
 	self.Destroyed:Connect(function()
 		self.playerJanitor:Cleanup()
 		self.charJanitor:Cleanup()
@@ -181,18 +191,21 @@ end
 
 --// SERVER START //--
 function M1:OnStartServer(air, spaceHeld)
+	--Apply statuses to make sure they can't movestack/run while attacking
 	local atk1 = Attacking.new(self.Character)
 	atk1:Start(m1Config.Cooldown)
 	local noJumper = noJump.new(self.Character)
 	noJumper:Start(0.75)
-
+	
+	-- Normal character checks
 	local char = self.Character.Instance
 	local plr = self.Player
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	local hum = char:FindFirstChildOfClass("Humanoid")
 
 	if not (hrp and hum and hum.Health > 0) then return end
-
+	
+	-- Initialize metadata (read-only and cannot be modified without setmetadata())
 	local meta = self:GetMetadata()
 	local comboCount = meta.Combo
 	local lastTick = meta.LastTick
@@ -209,7 +222,8 @@ function M1:OnStartServer(air, spaceHeld)
 			track:Play()
 		end
 	end
-
+	
+	--Boolean for last m1 of chain
 	local finalHit = (comboCount == m1Config.MaxCombo)
 	
 	-- SERVER HIT DETECTION AND DAMAGE LOGIC
@@ -226,7 +240,8 @@ function M1:OnStartServer(air, spaceHeld)
 		if self.TargetLastHit[hit] and (now - self.TargetLastHit[hit]) < 0.15 then return end
 		
 		self.TargetLastHit[hit] = now
-				
+		
+		-- Magnitude check to make sure hitbox packet wasn't fired from an abornmally large distance
 		if targetHum ~= self.Character.Instance and targetHum.Parent:FindFirstChild("HumanoidRootPart") then
 			local magpos = hrp.Position
 			if (magpos-targetHum.Parent.HumanoidRootPart.Position).magnitude > 20 then
@@ -243,9 +258,10 @@ function M1:OnStartServer(air, spaceHeld)
 			dmgContainer.Guardbreak = finalHit
 			dmgContainer.Knockback = finalHit
 			
+			-- Last m1 chain variants (uppercut if grounded and holding space, downslam if used midair)
 			if finalHit then
 				if air then dmgContainer.Knockback = false dmgContainer.Downslam = true end
-				if spaceHeld then dmgContainer.Knockback = false dmgContainer.Knockup = true end
+				if spaceHeld and not air then dmgContainer.Knockback = false dmgContainer.Knockup = true end
 			end
 			print("Reached ")
 			--Fires WCS DamageTaken Event on target character
@@ -253,6 +269,7 @@ function M1:OnStartServer(air, spaceHeld)
 		end
 	end)
 	
+	-- Update combo count and apply cooldown
 	if finalHit then
 		self:ApplyCooldown(m1Config.FinalComboEndlag)
 		local stunEffect = AtkStun.new(self.Character)
@@ -280,16 +297,20 @@ function M1:OnStartClient(air, spaceHeld)
 
 	if not (hrp and hum and hum.Health > 0) then return end
 	
+	-- Client-side hitboxes (Delay based on windup)
 	task.delay(m1Config.Windup, function()
 		if not self.Character or not self.Character.Instance then return end
-		-- Hitbox creation (MuchachoHitbox OSS library)
-
+		-- Hitbox creation (MuchachoHitbox open source hitbox library)
+		
+		--Client starts after server finishes running. Metadata sync necessary
 		local isFinalHit = (meta.Combo - 1 == 0)
- 
+		
+		--Excluding self from hitbox detection
 		local ovParams = OverlapParams.new()
 		ovParams.FilterType = Enum.RaycastFilterType.Exclude
 		ovParams.FilterDescendantsInstances = {char}
-
+		
+		-- https://github.com/CatSushi/MuchachoHitbox/wiki for API and documentation
 		local hitbox = MuchachoHitbox.CreateHitbox()
 		hitbox.Shape = Enum.PartType.Block
 		hitbox.CFrame = hrp
@@ -304,22 +325,24 @@ function M1:OnStartClient(air, spaceHeld)
 		
 		-- Hitbox detection (no need to cleanup as MuchachoHitbox handles its own garbage collection)
 		hitbox.Touched:Connect(function(hit, targetHum)
-			print(hit)
-			print(targetHum)
 			if targetHum.Health <= 0 then
 				return
 			end
-
+			
+			--Initial sanity check to ensure each target only gets hit by hitbox once
 			if hitTargets[targetHum] then
 				return
 			end
 			hitTargets[targetHum] = true
-
+			
+			--Send hit metadata to server
 			HitboxPacket:Fire(targetHum)
 		end)
-
+		
+		--Create the configured hitbox
 		hitbox:Start()
-
+		
+		--Cleanup (MuchachoHitbox handles Janitor operations and connection cleanup)
 		task.delay(0.15, function()
 			if hitbox then
 				hitbox:Stop()
