@@ -34,17 +34,20 @@ end
 
 -- VFX function for thunder punch
 local function applyThunderPunch(char, hrp)
+	-- Point Light for the flashiness
 	local pl = Instance.new("PointLight")
 	pl.Parent = hrp
 	pl.Color = Color3.fromRGB(26, 194, 255)
 	pl.Brightness = 0
 	pl.Range = 0
-
+	
+	-- Tween for the cool gradiant on the point light
 	TweenService:Create(pl, TweenInfo.new(0.2), {Range = 10, Brightness = 0.75}):Play()
 	task.delay(0.2, function()
 		TweenService:Create(pl, TweenInfo.new(0.2), {Range = 0, Brightness = 0}):Play()
 	end)
-
+	
+	-- Sound for the electricity
 	local sfx = Instance.new("Sound")
 	sfx.Parent = hrp
 	sfx.Name = "Electricity"
@@ -52,8 +55,10 @@ local function applyThunderPunch(char, hrp)
 	sfx.PlaybackSpeed = 2
 	sfx.Volume = 1.15
 	sfx:Play()
+	-- Calm little cleanup
 	Debris:AddItem(sfx, 1.512)
-
+	
+	-- Awesome thunder vfx on arms through a for loop (cleanup at the end with Debris:AddItem())
 	for _, part in pairs(char:GetChildren()) do
 		if part.Name == "Right Arm" or part.Name == "Left Arm" then
 			local pticle = script:WaitForChild("Electric"):Clone()
@@ -69,11 +74,13 @@ end
 
 --// SERVER INIT //--
 function M1:OnConstructServer()
+	-- Mutual Exclusives based on global mutualexclusives table (WCS status effects) to know when move can be used and when it can't
 	self.MutualExclusives = Globals.GeneralMutualExclusives()
 	self.CheckOthersActive = true
 	self.CheckedByOthers = true
 	self.CheckClientState = true
-
+	
+	-- Create metadata for the skill
 	self:SetMetadata({
 		Combo = 1,
 		LastTick = 0,
@@ -88,7 +95,8 @@ function M1:OnConstructServer()
 		local hum = char:WaitForChild("Humanoid")
 		local animator = hum:WaitForChild("Animator")
 		local m1Anims = RS.Assets.Animations:FindFirstChild("M1Anims")
-
+		
+		-- Load all animations
 		for i = 1, m1Config.MaxCombo do
 			local anim = m1Anims:FindFirstChild(tostring(i))
 			if anim and animator then
@@ -105,7 +113,8 @@ function M1:OnConstructClient()
 	local hum = char:WaitForChild("Humanoid")
 	local animator = hum:WaitForChild("Animator")
 	local plr = self.Player
-
+	
+	-- Initialize animation tracks and janitor classes
 	self.AnimationTracks = {}
 	self.playerJanitor = Janitor.new()
 	self.charJanitor = Janitor.new()
@@ -129,7 +138,8 @@ function M1:OnConstructClient()
 			end
 		end
 	end
-
+	
+	-- Load default animations initially
 	LoadAnimations()
 	
 	--Change animations if player's fist type changes (char in case of NPCs)
