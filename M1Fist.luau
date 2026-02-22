@@ -4,7 +4,6 @@ local WCS = require(game.ReplicatedStorage.wcs)
 local Attacking = _G.StatusEffects.Attacking
 local noJump = _G.StatusEffects.NoJump
 local AtkStun = _G.StatusEffects.AttackingStun
---// SERVICES //--
 local RS = game:GetService("ReplicatedStorage")
 local Debris = game.Debris
 local TweenService = game:GetService("TweenService")
